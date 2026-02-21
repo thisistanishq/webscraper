@@ -1,0 +1,1242 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scroll-Based 3D CMRL Metro Experience</title>
+    <style>
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            /* Scrollable space */
+            height: 500vh;
+            overflow-x: hidden;
+            overscroll-behavior: none;
+            background-color: #cbf0ff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        /* Container for the 3D WebGL Canvas */
+        #webgl-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 1;
+            pointer-events: none;
+            /* Let scrolls pass through */
+        }
+
+        /* UI Overlay */
+        .scroll-ui {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: white;
+            z-index: 50;
+            text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+            pointer-events: none;
+        }
+
+        .scroll-ui h1 {
+            font-size: 3rem;
+            margin: 0 0 10px 0;
+            letter-spacing: 2px;
+        }
+
+        .scroll-ui p {
+            font-size: 1.2rem;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        .mouse-icon {
+            width: 24px;
+            height: 36px;
+            border: 2px solid white;
+            border-radius: 12px;
+            position: relative;
+        }
+
+        .mouse-icon::after {
+            content: '';
+            position: absolute;
+            top: 6px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 4px;
+            height: 8px;
+            background: white;
+            border-radius: 2px;
+            animation: scrollWheel 1.5s infinite;
+        }
+
+        @keyframes scrollWheel {
+            0% {
+                top: 6px;
+                opacity: 1;
+            }
+
+            100% {
+                top: 18px;
+                opacity: 0;
+            }
+        }
+
+        /* Cinematic Letterbox Overlays */
+        .cinematic-bar {
+            position: fixed;
+            left: 0;
+            width: 100vw;
+            height: 0vh;
+            /* Will animate to ~15vh or 20vh */
+            background: black;
+            z-index: 100;
+            pointer-events: none;
+        }
+
+        #bar-top {
+            top: 0;
+        }
+
+        #bar-bottom {
+            bottom: 0;
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- Target for ThreeJS -->
+    <div id="webgl-container"></div>
+
+    <!-- Intro Text -->
+    <div class="scroll-ui">
+        <h1>CHENNAI METRO</h1>
+        <p>
+        <div class="mouse-icon"></div> Scroll Down to Ride</p>
+    </div>
+
+    <!-- Cinematic Bars -->
+    <div class="cinematic-bar" id="bar-top"></div>
+    <div class="cinematic-bar" id="bar-bottom"></div>
+
+    <!-- Libraries -->
+    <!-- Using older but highly stable Three.js directly via CDN for this standalone file -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <!-- Post Processing for Awwwards-winning Bloom -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/ScrollTrigger.min.js"></script>
+
+    <script>
+        gsap.registerPlugin(ScrollTrigger);
+
+        // --- 1. CORE THREE.JS SETUP ---
+        const container = document.getElementById('webgl-container');
+        const scene = new THREE.Scene();
+
+        // Add atmospheric fog
+        scene.fog = new THREE.FogExp2(0xcbf0ff, 0.002);
+
+        // Camera
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+        // Initial Camera Position (Looking up at the sky)
+        camera.position.set(0, 50, 100);
+        camera.lookAt(0, 50, 0);
+
+        // Renderer for high-quality realism
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance" });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Cap pixel ratio for performance
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        renderer.outputEncoding = THREE.sRGBEncoding;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.0;
+        renderer.physicallyCorrectLights = true;
+        container.appendChild(renderer.domElement);
+
+        // --- AWWWARDS POST PROCESSING (BLOOM) ---
+        const composer = new THREE.EffectComposer(renderer);
+        composer.addPass(new THREE.RenderPass(scene, camera));
+
+        // Unreal Bloom: Resolution, Strength, Radius, Threshold
+        // Calibrated threshold to 0.9 to ensure only emissive LEDs and the direct sun bloom, preventing bridge overexposure.
+        const bloomPass = new THREE.UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.85, 0.5, 0.9);
+        composer.addPass(bloomPass);
+
+        // --- PMREM HDRI ENVIRONMENT (Real Reflections) ---
+        const pmremGenerator = new THREE.PMREMGenerator(renderer);
+        pmremGenerator.compileEquirectangularShader();
+
+        // --- 2. LIGHTING (REALISTIC SUN AND GI) ---
+        const ambientLight = new THREE.AmbientLight(0xdcf3ff, 0.8); // Higher for physical lights
+        scene.add(ambientLight);
+
+        const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 1.2);
+        hemiLight.position.set(0, 200, 0);
+        scene.add(hemiLight);
+
+        // Main Sun Light casting shadows
+        const sunLight = new THREE.DirectionalLight(0xffeedd, 3.5);
+        sunLight.position.set(100, 150, 50);
+        sunLight.castShadow = true;
+        sunLight.shadow.mapSize.width = 2048;
+        sunLight.shadow.mapSize.height = 2048;
+        sunLight.shadow.camera.near = 10;
+        sunLight.shadow.camera.far = 300;
+        const d = 150;
+        sunLight.shadow.camera.left = -d;
+        sunLight.shadow.camera.right = d;
+        sunLight.shadow.camera.top = d;
+        sunLight.shadow.camera.bottom = -d;
+        sunLight.shadow.bias = -0.0005;
+        scene.add(sunLight);
+
+        // --- 3. ENVIRONMENT (SKY & CLOUDS) ---
+        // Visual Sun (Glowing Sphere)
+        const sunGeo = new THREE.SphereGeometry(15, 32, 32);
+        const sunMat = new THREE.MeshBasicMaterial({ color: 0xffffee });
+        const sunMesh = new THREE.Mesh(sunGeo, sunMat);
+        sunMesh.position.copy(sunLight.position);
+
+        // Sun glow effect
+        const glowGeo = new THREE.SphereGeometry(25, 32, 32);
+        const glowMat = new THREE.MeshBasicMaterial({
+            color: 0xffd700,
+            transparent: true,
+            opacity: 0.3,
+            blending: THREE.AdditiveBlending
+        });
+        const sunGlow = new THREE.Mesh(glowGeo, glowMat);
+        sunMesh.add(sunGlow);
+        scene.add(sunMesh);
+
+        // Procedural Clouds
+        const cloudGroup = new THREE.Group();
+        scene.add(cloudGroup);
+
+        // Simple procedural texture for clouds
+        function createCloudTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 64;
+            canvas.height = 64;
+            const context = canvas.getContext('2d');
+            const gradient = context.createRadialGradient(32, 32, 0, 32, 32, 32);
+            gradient.addColorStop(0, 'rgba(255,255,255,1)');
+            gradient.addColorStop(1, 'rgba(255,255,255,0)');
+            context.fillStyle = gradient;
+            context.fillRect(0, 0, 64, 64);
+            const texture = new THREE.CanvasTexture(canvas);
+            return texture;
+        }
+
+        const cloudTexture = createCloudTexture();
+        const cloudMaterial = new THREE.SpriteMaterial({
+            map: cloudTexture,
+            color: 0xffffff,
+            transparent: true,
+            opacity: 0.6,
+            depthWrite: false
+        });
+
+        // Generate a field of clouds
+        for (let i = 0; i < 50; i++) {
+            const cloud = new THREE.Sprite(cloudMaterial);
+            // Random positions in the sky layer
+            const x = (Math.random() - 0.5) * 500;
+            const y = 80 + Math.random() * 40; // High up
+
+            // --- GENERATE ENVIRONMENT TEXTURE FROM SKY ---
+            // We do this after creating the sky elements so that PMREM captures them
+            // Only do it once at the end of the cloud loop or simply here to ensure scene is somewhat populated
+            if (i === 49) {
+                scene.environment = pmremGenerator.fromScene(scene).texture;
+            }
+            const z = (Math.random() - 0.5) * -400; // Mostly behind
+
+            // Scaled realistically
+            const scale = 30 + Math.random() * 40;
+            cloud.position.set(x, y, z);
+
+            // Squish the sprite to look like a flat bottom cloud
+            cloud.scale.set(scale * 1.5, scale * 0.8, 1);
+            cloudGroup.add(cloud);
+        }
+
+        // --- 4. SCENE OBJECTS (ENVIRONMENT & BRIDGE DETAILED) ---
+        // Procedural Concrete Texture for realistic bridge materials (with Bump & Weathering)
+        function createConcreteMaterial() {
+            const size = 1024; // High res for detail
+            const canvasColor = document.createElement('canvas');
+            const canvasBump = document.createElement('canvas');
+            canvasColor.width = canvasBump.width = size;
+            canvasColor.height = canvasBump.height = size;
+
+            const ctxColor = canvasColor.getContext('2d');
+            const ctxBump = canvasBump.getContext('2d');
+
+            // Base Grays
+            ctxColor.fillStyle = '#7a7e83'; ctxColor.fillRect(0, 0, size, size);
+            ctxBump.fillStyle = '#808080'; ctxBump.fillRect(0, 0, size, size);
+
+            const imgColor = ctxColor.getImageData(0, 0, size, size);
+            const imgBump = ctxBump.getImageData(0, 0, size, size);
+
+            // Generate Noise, Grime, and Pits
+            for (let i = 0; i < imgColor.data.length; i += 4) {
+                // 1. Fine High-Frequency Noise (Sand/Grit)
+                const noise = (Math.random() - 0.5) * 40;
+
+                // 2. Low-Frequency Noise (Weathering/Moss/Dirt)
+                // Use simple sine waves as fake perlin noise for large patches
+                const x = (i / 4) % size; const y = Math.floor((i / 4) / size);
+                const patch = Math.sin(x * 0.02) * Math.cos(y * 0.02) + Math.sin(x * 0.05 + y * 0.01);
+
+                // Color variation
+                let r = imgColor.data[i] + noise;
+                let g = imgColor.data[i + 1] + noise;
+                let b = imgColor.data[i + 2] + noise;
+
+                // Add grime/moss where patch is low
+                if (patch < -0.5) {
+                    r -= 20; g -= 10; b -= 25; // Brownish green dirt
+                } else if (patch > 1.0) {
+                    r += 30; g += 30; b += 30; // Sun bleached spots
+                }
+
+                imgColor.data[i] = Math.max(0, Math.min(255, r));
+                imgColor.data[i + 1] = Math.max(0, Math.min(255, g));
+                imgColor.data[i + 2] = Math.max(0, Math.min(255, b));
+                imgColor.data[i + 3] = 255;
+
+                // 3. Bump Map (Pits and roughness)
+                let bumpVal = 128 + noise;
+                // Add occasional deep pits
+                if (Math.random() < 0.005) bumpVal = 0; // Deep hole
+                else if (Math.random() < 0.01) bumpVal = 255; // Small rock sticking out
+
+                imgBump.data[i] = imgBump.data[i + 1] = imgBump.data[i + 2] = Math.max(0, Math.min(255, bumpVal));
+                imgBump.data[i + 3] = 255;
+            }
+
+            ctxColor.putImageData(imgColor, 0, 0);
+            ctxBump.putImageData(imgBump, 0, 0);
+
+            // Large structural streaks (Water damage/leaks)
+            ctxColor.fillStyle = 'rgba(30, 25, 20, 0.15)'; // Dark grime
+            ctxBump.fillStyle = 'rgba(0,0,0,0.1)'; // Slight indentation
+            for (let i = 0; i < 1500; i++) {
+                const rx = Math.random() * size; const ry = Math.random() * size;
+                const rw = Math.random() * 8 + 2; const rh = Math.random() * 60 + 20;
+                ctxColor.fillRect(rx, ry, rw, rh);
+                ctxBump.fillRect(rx, ry, rw, rh);
+            }
+
+            const map = new THREE.CanvasTexture(canvasColor);
+            const bumpMap = new THREE.CanvasTexture(canvasBump);
+            map.wrapS = map.wrapT = THREE.RepeatWrapping;
+            bumpMap.wrapS = bumpMap.wrapT = THREE.RepeatWrapping;
+
+            // Important: Scale textures so they don't look huge
+            map.repeat.set(4, 4);
+            bumpMap.repeat.set(4, 4);
+
+            return new THREE.MeshStandardMaterial({
+                color: 0xaaaaaa,
+                map: map,
+                bumpMap: bumpMap,
+                bumpScale: 0.8,
+                roughness: 0.95,
+                metalness: 0.05
+            });
+        }
+
+        const concreteMat = createConcreteMaterial();
+
+        // Background City / Massive Parallax Depth
+        const cityGroup = new THREE.Group();
+        cityGroup.position.set(0, 0, -300); // Deep background
+        scene.add(cityGroup);
+
+        const layer1 = new THREE.Group(); layer1.position.z = -150;
+        const layer2 = new THREE.Group(); layer2.position.z = -300;
+        const layer3 = new THREE.Group(); layer3.position.z = -450;
+        cityGroup.add(layer1, layer2, layer3);
+
+        function populateCityLayer(layer, baseColor, scale) {
+            const buildMat = new THREE.MeshStandardMaterial({ color: baseColor, roughness: 0.8, fog: true });
+            for (let i = -15; i < 15; i++) {
+                const height = (40 + Math.random() * 100) * scale;
+                const width = (20 + Math.random() * 30) * scale;
+                const depth = (20 + Math.random() * 30) * scale;
+                const buildGeo = new THREE.BoxGeometry(width, height, depth);
+                const building = new THREE.Mesh(buildGeo, buildMat);
+                building.position.set(i * 50 * scale + (Math.random() * 50 - 25), height / 2 - 20, (Math.random() * 100));
+
+                // Fake reflective windows
+                if (Math.random() > 0.4) {
+                    const winGeo = new THREE.BoxGeometry(width - 2, height - 4, depth + 0.2);
+                    const winMesh = new THREE.Mesh(winGeo, new THREE.MeshPhysicalMaterial({ color: 0x112233, roughness: 0.1, metalness: 0.9, clearcoat: 1.0 }));
+                    building.add(winMesh);
+                }
+                layer.add(building);
+            }
+        }
+
+        populateCityLayer(layer1, 0x4a5a6a, 0.8);
+        populateCityLayer(layer2, 0x3a4a5a, 1.2);
+        populateCityLayer(layer3, 0x2a3a4a, 1.6);
+
+        // Bridge Group (Animated up later)
+        const bridgeGroup = new THREE.Group();
+        bridgeGroup.position.y = -60;
+        scene.add(bridgeGroup);
+
+        // Pillars
+        const pillarGeo = new THREE.CylinderGeometry(4, 5, 80, 16);
+        for (let i = -6; i <= 6; i++) {
+            const pillar = new THREE.Mesh(pillarGeo, concreteMat);
+            pillar.position.set(i * 40, -10, 0);
+            pillar.castShadow = true;
+            pillar.receiveShadow = true;
+            bridgeGroup.add(pillar);
+
+            // Pillar cap details
+            const capGeo = new THREE.BoxGeometry(14, 2, 22);
+            const cap = new THREE.Mesh(capGeo, concreteMat);
+            cap.position.set(0, 31, 0);
+            pillar.add(cap);
+        }
+
+        // Main horizontal girder
+        const girderGeo = new THREE.BoxGeometry(400, 4, 18);
+        const girder = new THREE.Mesh(girderGeo, concreteMat);
+        girder.position.set(0, 33, 0);
+        girder.castShadow = true;
+        girder.receiveShadow = true;
+        bridgeGroup.add(girder);
+
+        // Track bed (Sleepers and ballast)
+        const trackBedGeo = new THREE.BoxGeometry(400, 1, 12);
+        const trackBedMat = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 1, metalness: 0 });
+        const trackBed = new THREE.Mesh(trackBedGeo, trackBedMat);
+        trackBed.position.set(0, 35.5, 0);
+        trackBed.receiveShadow = true;
+        bridgeGroup.add(trackBed);
+
+        // Wooden/Concrete Sleepers
+        const sleeperGeo = new THREE.BoxGeometry(0.8, 0.4, 9);
+        const sleeperMat = new THREE.MeshStandardMaterial({ color: 0x5a5a5a, roughness: 0.9 });
+        for (let i = -200; i < 200; i += 2) {
+            const sleeper = new THREE.Mesh(sleeperGeo, sleeperMat);
+            sleeper.position.set(i, 36.1, 0);
+            sleeper.receiveShadow = true;
+            bridgeGroup.add(sleeper);
+        }
+
+        // The Steel Rails
+        const trackGeo = new THREE.BoxGeometry(400, 0.6, 0.6);
+        const steelMat = new THREE.MeshStandardMaterial({ color: 0xdddddd, roughness: 0.2, metalness: 1 });
+        const railFront = new THREE.Mesh(trackGeo, steelMat);
+        railFront.position.set(0, 36.5, 3.5);
+        railFront.castShadow = true; railFront.receiveShadow = true;
+        bridgeGroup.add(railFront);
+
+        const railBack = new THREE.Mesh(trackGeo, steelMat);
+        railBack.position.set(0, 36.5, -3.5);
+        railBack.castShadow = true; railBack.receiveShadow = true;
+        bridgeGroup.add(railBack);
+
+        // Catenary Poles (Overhead Electric Wires)
+        const poleGeo = new THREE.CylinderGeometry(0.3, 0.4, 25, 8);
+        const rustMetalMat = new THREE.MeshStandardMaterial({ color: 0x555555, roughness: 0.8, metalness: 0.6 });
+        const wireGeo = new THREE.CylinderGeometry(0.05, 0.05, 400, 4);
+        const wireMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
+
+        const mainWire = new THREE.Mesh(wireGeo, wireMat);
+        mainWire.position.set(0, 58, 0);
+        bridgeGroup.add(mainWire);
+
+        const returnWire = new THREE.Mesh(wireGeo, wireMat);
+        returnWire.position.set(0, 60, 0);
+        bridgeGroup.add(returnWire);
+
+        const cableGeo = new THREE.CylinderGeometry(0.1, 0.1, 400, 4);
+        cableGeo.rotateZ(Math.PI / 2);
+
+        for (let i = -5; i <= 5; i++) {
+            const pole = new THREE.Mesh(poleGeo, rustMetalMat);
+            pole.position.set(i * 35, 48, -7);
+            pole.castShadow = true;
+            bridgeGroup.add(pole);
+
+            const armGeo = new THREE.CylinderGeometry(0.2, 0.2, 10, 8);
+            armGeo.rotateX(Math.PI / 2);
+            const arm = new THREE.Mesh(armGeo, rustMetalMat);
+            arm.position.set(0, 10, 3.5);
+            pole.add(arm);
+
+            // Drop wires from track edge
+            const cable = new THREE.Mesh(cableGeo, rustMetalMat);
+            cable.position.set(i * 35, 35, 7.5); // Cable pipes on side
+            bridgeGroup.add(cable);
+        }
+
+        // Bridge Parapets (Sides)
+        const parapetMat = new THREE.MeshStandardMaterial({ color: 0x666666, roughness: 0.9 });
+        const parapetGeo = new THREE.BoxGeometry(400, 5, 0.6);
+        const p1 = new THREE.Mesh(parapetGeo, parapetMat);
+        p1.position.set(0, 37.5, 8.5);
+        bridgeGroup.add(p1);
+        const p2 = new THREE.Mesh(parapetGeo, parapetMat);
+        p2.position.set(0, 37.5, -8.5);
+        bridgeGroup.add(p2);
+
+        // --- 5. SCENE OBJECTS (CMRL TRAIN DETAILED) ---
+        // Procedural Brushed Metal Texture for side panels
+        function createBrushedMetalTexture() {
+            const canvas = document.createElement('canvas');
+            const size = 512;
+            canvas.width = canvas.height = size;
+            const ctx = canvas.getContext('2d');
+
+            ctx.fillStyle = '#b0b5b9'; ctx.fillRect(0, 0, size, size); // Slightly darker steel
+
+            // Draw horizontal streaks for brushed effect
+            ctx.fillStyle = 'rgba(255,255,255,0.05)';
+            for (let i = 0; i < 5000; i++) {
+                const y = Math.random() * size;
+                const h = Math.random() * 2 + 1;
+                const w = Math.random() * 100 + 20;
+                const x = Math.random() * size;
+                ctx.fillRect(x, y, w, h);
+            }
+            ctx.fillStyle = 'rgba(0,0,0,0.04)';
+            for (let i = 0; i < 5000; i++) {
+                const y = Math.random() * size;
+                const h = Math.random() * 2 + 1;
+                const w = Math.random() * 100 + 20;
+                const x = Math.random() * size;
+                ctx.fillRect(x, y, w, h);
+            }
+
+            // Add subtle vertical panel lines
+            ctx.fillStyle = 'rgba(0,0,0,0.3)';
+            for (let i = 0; i <= size; i += 128) {
+                ctx.fillRect(i, 0, 2, size);
+            }
+
+            const tex = new THREE.CanvasTexture(canvas);
+            tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+            return tex;
+        }
+
+        const metalTex = createBrushedMetalTexture();
+
+        const trainMat = new THREE.MeshStandardMaterial({
+            color: 0xdddddd,
+            roughness: 0.35,
+            metalness: 0.7,
+            map: metalTex
+        }); // Brushed Steel sides
+
+        // The blue stripe material that was previously deleted accidentally
+        const blueStripeMat = new THREE.MeshStandardMaterial({ color: 0x0072BC, roughness: 0.4, metalness: 0.2 });
+
+        // Exact CMRL Blue (Glossy)
+        const cmrlBlueMat = new THREE.MeshPhysicalMaterial({
+            color: 0x0033cc, // Rich vibrant blue from image
+            roughness: 0.15,
+            metalness: 0.3,
+            clearcoat: 0.8,
+            clearcoatRoughness: 0.1
+        });
+
+        const darkMetalMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8, metalness: 0.5 }); // Darker bogies
+        const springMat = new THREE.MeshStandardMaterial({ color: 0x444444, roughness: 0.7, metalness: 0.3 });
+
+        // Door Material with CMRL branding touch
+        function createDoorTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 128; canvas.height = 256;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#b0b5b9'; ctx.fillRect(0, 0, 128, 256); // Match steel
+
+            // Black rubber seal around the door (realism)
+            ctx.strokeStyle = '#111111'; ctx.lineWidth = 4;
+            ctx.strokeRect(2, 2, 124, 252);
+
+            // Center split with rubber seal
+            ctx.fillStyle = '#111111'; ctx.fillRect(62, 0, 4, 256);
+            return new THREE.CanvasTexture(canvas);
+        }
+        const doorMat = new THREE.MeshStandardMaterial({ map: createDoorTexture(), roughness: 0.4, metalness: 0.6 });
+
+        // HYPER-REALISTIC PHYSICAL GLASS (Transmission, Refraction, Thickness)
+        const glassMat = new THREE.MeshPhysicalMaterial({
+            color: 0x111111,          // Base deep tint
+            metalness: 0.1,           // Slight metallic finish common on metro glass
+            roughness: 0.0,           // Perfectly smooth exterior
+            ior: 1.52,                // Index of refraction for architectural glass
+            envMapIntensity: 2.0,     // High HDRI reflection of the sky
+            clearcoat: 1.0,           // Extra glossy coat
+            clearcoatRoughness: 0.05,
+            transmission: 0.9,        // Key to physical glass: lets light and geometry pass through
+            thickness: 0.5,           // Volume for refraction
+            transparent: true,        // Enable alpha blending as a fallback
+            opacity: 1.0,
+            side: THREE.DoubleSide
+        });
+
+        // 3D Interior Base Material
+        const interiorBaseMat = new THREE.MeshStandardMaterial({
+            color: 0x1a1a1a,
+            roughness: 0.9
+        });
+
+        // Digital Board Texture
+        function createDigitalBoardTex(text) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 256; canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#000000'; ctx.fillRect(0, 0, 256, 64);
+            ctx.fillStyle = '#ff3300'; // LED Orange/Red
+            ctx.font = 'bold 40px monospace';
+            ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.shadowColor = '#ff3300'; ctx.shadowBlur = 10;
+            ctx.fillText(text, 128, 32);
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        const boardAirTex = createDigitalBoardTex("✈ AIRPORT ");
+        const boardEmissiveMat = new THREE.MeshStandardMaterial({
+            color: 0xffffff, map: boardAirTex, emissive: 0xff3300, emissiveMap: boardAirTex, emissiveIntensity: 2
+        });
+
+        const trainGroup = new THREE.Group();
+        scene.add(trainGroup);
+        // Start train extremely far offscreen to the right
+        trainGroup.position.set(250, 43, 0);
+
+        function createCoach(isFront, isRear) {
+            const coachGroup = new THREE.Group();
+
+            // Main Body Extrusion (Aerodynamic Alstom Shape)
+            const bodyLength = 60;
+            const bodyShape = new THREE.Shape();
+            bodyShape.moveTo(-5.8, -6); // Bottom Left
+            bodyShape.lineTo(5.8, -6);  // Bottom Right
+            bodyShape.lineTo(6, 4.5);   // Side Right
+            bodyShape.quadraticCurveTo(6, 6, 3.5, 6); // Curve Roof Right
+            bodyShape.lineTo(-3.5, 6);  // Roof Center
+            bodyShape.quadraticCurveTo(-6, 6, -6, 4.5); // Curve Roof Left
+            bodyShape.lineTo(-5.8, -6); // Side Left
+
+            const extrudeSettings = { depth: bodyLength, bevelEnabled: true, bevelSegments: 3, steps: 1, bevelSize: 0.1, bevelThickness: 0.1 };
+            const bodyGeo = new THREE.ExtrudeGeometry(bodyShape, extrudeSettings);
+            bodyGeo.translate(0, 0, -bodyLength / 2); // Center it along Z
+            bodyGeo.rotateY(Math.PI / 2); // Rotate to align with X-axis
+
+            const body = new THREE.Mesh(bodyGeo, trainMat);
+            body.castShadow = true; body.receiveShadow = true;
+            coachGroup.add(body);
+
+            // Stripe Material (CMRL iconic blue)
+            const blueStripeMat = new THREE.MeshStandardMaterial({ color: 0x0072BC, roughness: 0.4, metalness: 0.2 });
+
+            // Stripe & Windows (Cut into smaller segments to allow doors)
+            const stripeGeo = new THREE.BoxGeometry(bodyLength + 0.1, 1.5, 12.2);
+
+            // Lower thick stripe
+            const lowerStripe = new THREE.Mesh(stripeGeo, blueStripeMat);
+            lowerStripe.position.y = -2;
+            coachGroup.add(lowerStripe);
+
+            // Upper thin stripe (CMRL Roofline) - Narrower Z to fit curved roof
+            const upperGeo = new THREE.BoxGeometry(bodyLength + 0.1, 0.5, 10.5);
+            const upperStripe = new THREE.Mesh(upperGeo, blueStripeMat);
+            upperStripe.position.y = 5.75;
+            coachGroup.add(upperStripe);
+
+            // 4 Doors per side
+            const doorPositions = [-20, -6.6, 6.6, 20];
+            const doorGeo = new THREE.BoxGeometry(4, 8, 12.3);
+            doorPositions.forEach(px => {
+                const door = new THREE.Mesh(doorGeo, doorMat);
+                door.position.set(px, 0, 0);
+                coachGroup.add(door);
+            });
+
+            // Windows between doors & Interior planes
+            const winPositions = [
+                { x: -13.3, w: 6 }, { x: 0, w: 6 }, { x: 13.3, w: 6 }
+            ];
+            winPositions.forEach(pos => {
+                // True Physical Glass
+                const win = new THREE.Mesh(new THREE.BoxGeometry(pos.w, 3.5, 12.1), glassMat);
+                win.position.set(pos.x, 2, 0);
+                coachGroup.add(win);
+            });
+
+            // True 3D Interior Details (Visible through physical glass)
+            const seatGeo = new THREE.BoxGeometry(2, 2, 4);
+            const seatMat = new THREE.MeshStandardMaterial({ color: 0x0055aa, roughness: 0.8 }); // Blue seats
+            const poleGeo = new THREE.CylinderGeometry(0.1, 0.1, 10, 8);
+            const poleMat = new THREE.MeshStandardMaterial({ color: 0xffcc00, metalness: 0.2, roughness: 0.3 }); // CMRL Yellow Poles
+
+            // Stylized passenger geometries (spheres for heads, cylinders for bodies)
+            const headGeo = new THREE.SphereGeometry(0.8, 16, 16);
+            const passBodyGeo = new THREE.CylinderGeometry(1.2, 1.2, 4, 16);
+            const passMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.9 }); // Dark silhouettes
+
+            for (let x = -20; x <= 20; x += 6.6) {
+                // Yellow Vertical Poles
+                for (let z = -1; z <= 1; z += 2) {
+                    const pole = new THREE.Mesh(poleGeo, poleMat);
+                    pole.position.set(x + 2, 1, z * 2.5);
+                    coachGroup.add(pole);
+
+                    // Add seating only in non-door zones
+                    if (Math.abs(x) > 7 && Math.abs(x) !== 20) {
+                        const seat = new THREE.Mesh(seatGeo, seatMat);
+                        seat.position.set(x, -4, z * 5);
+                        coachGroup.add(seat);
+
+                        // 50% chance a passenger is sitting
+                        if (Math.random() > 0.5) {
+                            const passenger = new THREE.Group();
+                            const pBody = new THREE.Mesh(passBodyGeo, passMat);
+                            pBody.position.y = -2;
+                            const pHead = new THREE.Mesh(headGeo, passMat);
+                            pHead.position.y = 0.5;
+                            passenger.add(pBody, pHead);
+                            passenger.position.set(x, -2, z * 5);
+                            coachGroup.add(passenger);
+                        }
+                    }
+                }
+
+                // Standing passengers near doors
+                if (Math.random() > 0.6) {
+                    const standing = new THREE.Group();
+                    const sBody = new THREE.Mesh(passBodyGeo, passMat);
+                    sBody.position.y = -1;
+                    const sHead = new THREE.Mesh(headGeo, passMat);
+                    sHead.position.y = 1.5;
+                    standing.add(sBody, sHead);
+                    standing.position.set(x + (Math.random() * 2 - 1), -1, Math.random() * 2 - 1);
+                    coachGroup.add(standing);
+                }
+            }
+
+            // Central ceiling lighting (ambient line inside)
+            const interiorLight = new THREE.PointLight(0xffeedd, 0.5, 30);
+            interiorLight.position.set(0, 4, 0);
+            coachGroup.add(interiorLight);
+
+            // Digital Board (Side)
+            const sideBoard = new THREE.Mesh(new THREE.PlaneGeometry(6, 1.5), boardEmissiveMat);
+            sideBoard.position.set(0, 4.5, 6.06);
+            coachGroup.add(sideBoard);
+
+            // Roof AC
+            const acGeo = new THREE.BoxGeometry(10, 1.5, 6);
+            for (let i = -1; i <= 1; i += 2) {
+                const ac = new THREE.Mesh(acGeo, trainMat);
+                ac.position.set(i * 15, 6.5, 0);
+                coachGroup.add(ac);
+            }
+
+            // Detailed Bogies
+            const bogieBaseGeo = new THREE.BoxGeometry(14, 2, 11);
+            const suspensionGeo = new THREE.CylinderGeometry(0.5, 0.5, 3, 8);
+
+            for (let i = -1; i <= 1; i += 2) {
+                const bogie = new THREE.Group();
+                bogie.position.set(i * 20, -7.5, 0);
+
+                const frame = new THREE.Mesh(bogieBaseGeo, darkMetalMat);
+                bogie.add(frame);
+
+                // Wheels + Suspension + Calipers
+                const wheelGeo = new THREE.CylinderGeometry(1.6, 1.6, 1.2, 24);
+                wheelGeo.rotateX(Math.PI / 2);
+                const caliperGeo = new THREE.BoxGeometry(1, 2, 0.5);
+
+                for (let w = -1; w <= 1; w += 2) {
+                    for (let d = -1; d <= 1; d += 2) {
+                        const wheel = new THREE.Mesh(wheelGeo, darkMetalMat);
+                        wheel.position.set(w * 4, -1, d * 5);
+                        if (!coachGroup.userData.wheels) coachGroup.userData.wheels = [];
+                        coachGroup.userData.wheels.push(wheel);
+                        bogie.add(wheel);
+
+                        // Fake Caliper
+                        const caliper = new THREE.Mesh(caliperGeo, darkMetalMat);
+                        caliper.position.set(w * 4 + 1.5, -1, d * 5 + 0.5);
+                        bogie.add(caliper);
+
+                        // Suspension Spring
+                        const spring = new THREE.Mesh(suspensionGeo, springMat);
+                        spring.position.set(w * 4, 1, d * 5.5);
+                        bogie.add(spring);
+                    }
+                }
+                coachGroup.add(bogie);
+            }
+
+            // Engine Specific Details (Nose, Pantograph, Lights)
+            if (isFront || isRear) {
+                const noseGroup = new THREE.Group();
+                noseGroup.position.x = isFront ? -30 : 30; // Attached to body end
+
+                // 1. Base solid block (Grey skirting at bottom)
+                const skirtGeo = new THREE.BoxGeometry(8, 3, 12);
+                const skirt = new THREE.Mesh(skirtGeo, darkMetalMat);
+                skirt.position.set(isFront ? -4 : 4, -4.5, 0);
+                noseGroup.add(skirt);
+
+                // 2. The Blue Swept "Cheeks" (Sides of the nose)
+                // We use angled boxes to form the aerodynamic side profile
+                const cheekGeo = new THREE.BoxGeometry(8, 10, 2);
+                const leftCheek = new THREE.Mesh(cheekGeo, cmrlBlueMat);
+                leftCheek.position.set(isFront ? -3 : 3, 2, 5);
+                leftCheek.rotation.z = isFront ? -0.15 : 0.15; // Slope down forward
+                noseGroup.add(leftCheek);
+
+                const rightCheek = new THREE.Mesh(cheekGeo, cmrlBlueMat);
+                rightCheek.position.set(isFront ? -3 : 3, 2, -5);
+                rightCheek.rotation.z = isFront ? -0.15 : 0.15;
+                noseGroup.add(rightCheek);
+
+                // Top blue brow covering the window
+                const browGeo = new THREE.BoxGeometry(6, 1.5, 12);
+                const brow = new THREE.Mesh(browGeo, cmrlBlueMat);
+                brow.position.set(isFront ? -2 : 2, 7.5, 0);
+                brow.rotation.z = isFront ? 0.05 : -0.05;
+                noseGroup.add(brow);
+
+                // 3. Central Swept Black Glass Face
+                const faceGeo = new THREE.BoxGeometry(7, 10.5, 9);
+                const face = new THREE.Mesh(faceGeo, glassMat);
+                face.position.set(isFront ? -4 : 4, 2.5, 0);
+                face.rotation.z = isFront ? -0.3 : 0.3; // Aggressive slope back
+                noseGroup.add(face);
+
+                // Interior Black panel behind glass (so it's opaque black, not transparent all the way)
+                const faceBacking = new THREE.Mesh(new THREE.BoxGeometry(6, 10, 8.5), new THREE.MeshBasicMaterial({ color: 0x050505 }));
+                faceBacking.position.set(isFront ? -2 : 2, 2.5, 0);
+                faceBacking.rotation.z = isFront ? -0.3 : 0.3;
+                noseGroup.add(faceBacking);
+
+                // 4. CMRL Specific Headlight Clusters (3 dots + 1 red per side)
+                const clusterGeo = new THREE.BoxGeometry(2, 2.5, 2.5);
+                const clusterMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.9 });
+
+                for (let side = -1; side <= 1; side += 2) {
+                    const cluster = new THREE.Mesh(clusterGeo, clusterMat);
+                    cluster.position.set(isFront ? -7 : 7, -2.5, side * 4.5);
+                    cluster.rotation.z = isFront ? -0.2 : 0.2; // Match lower nose slope
+                    cluster.rotation.y = isFront ? side * 0.2 : -side * 0.2; // Angle outwards slightly
+                    noseGroup.add(cluster);
+
+                    // Add the 3 LED bulbs inside
+                    const bulbGeo = new THREE.CylinderGeometry(0.3, 0.3, 0.1, 16);
+                    bulbGeo.rotateZ(Math.PI / 2);
+
+                    const lightPositions = [
+                        { x: -1, y: 0.5, z: 0.5 }, // Top outer
+                        { x: -1, y: -0.5, z: 0.5 }, // Bottom outer
+                        { x: -1, y: -0.5, z: -0.5 }, // Bottom inner
+                    ];
+
+                    if (isFront) {
+                        const ledMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+                        lightPositions.forEach(pos => {
+                            const led = new THREE.Mesh(bulbGeo, ledMat);
+                            led.position.set(pos.x, pos.y, side > 0 ? pos.z : -pos.z);
+                            cluster.add(led);
+                        });
+                        // Add tiny red tail light marker next to inner bulb
+                        const redLed = new THREE.Mesh(bulbGeo, new THREE.MeshBasicMaterial({ color: 0xaa0000 }));
+                        redLed.position.set(-1, 0.5, side > 0 ? -0.4 : 0.4);
+                        cluster.add(redLed);
+
+                    } else if (isRear) {
+                        const ledMat = new THREE.MeshBasicMaterial({ color: 0xff0000 }); // All red at back
+                        lightPositions.forEach(pos => {
+                            const led = new THREE.Mesh(bulbGeo, ledMat);
+                            led.position.set(1, pos.y, side > 0 ? pos.z : -pos.z); // Facing opposite way
+                            cluster.add(led);
+                        });
+                    }
+                }
+
+                // 5. Driver Console (Inside the nose window area)
+                const consoleGeo = new THREE.BoxGeometry(3, 2, 8);
+                const consoleMesh = new THREE.Mesh(consoleGeo, new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.9 }));
+                consoleMesh.position.set(isFront ? -3 : 3, -1, 0);
+                noseGroup.add(consoleMesh);
+
+                // 6. Windshield Wipers
+                const wiperGeo = new THREE.CylinderGeometry(0.05, 0.05, 4);
+                const wiperMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
+                for (let i = -2; i <= 2; i += 4) {
+                    const wiper = new THREE.Mesh(wiperGeo, wiperMat);
+                    // Position roughly on sloped nose glass
+                    wiper.position.set(isFront ? -5.5 : 5.5, 2, i);
+                    wiper.rotation.z = isFront ? -0.8 : 0.8; // Match steep slope
+                    noseGroup.add(wiper);
+                }
+
+                // 7. Destination Board (Top Center of Glass)
+                const frontBoard = new THREE.Mesh(new THREE.PlaneGeometry(6, 1.5), boardEmissiveMat);
+                frontBoard.position.set(isFront ? -6.2 : 6.2, 5.5, 0);
+                frontBoard.rotation.y = isFront ? -Math.PI / 2 : Math.PI / 2;
+                frontBoard.rotation.x = 0; // Flat
+                noseGroup.add(frontBoard);
+
+                // Add the assembled CMRL nose to the coach
+                coachGroup.add(noseGroup);
+
+                // --- ROOF EQUIPMENT ---
+                // Pantograph (Connects to catenary wire at y=58. Train roof is at y=43 + 6 = 49.)
+                const pantoGroup = new THREE.Group();
+                pantoGroup.position.set(isFront ? 10 : -10, 6, 0);
+                const armGeo = new THREE.CylinderGeometry(0.2, 0.2, 12);
+
+                const pArm1 = new THREE.Mesh(armGeo, darkMetalMat);
+                pArm1.rotation.z = Math.PI / 4; pArm1.position.set(-4, 4, 0);
+                pantoGroup.add(pArm1);
+
+                const pArm2 = new THREE.Mesh(armGeo, darkMetalMat);
+                pArm2.rotation.z = -Math.PI / 4; pArm2.position.set(4, 4, 0);
+                pantoGroup.add(pArm2);
+
+                const crossArm = new THREE.Mesh(new THREE.BoxGeometry(6, 0.5, 4), darkMetalMat);
+                crossArm.position.set(0, 8, 0); // Touches 58
+                pantoGroup.add(crossArm);
+
+                coachGroup.add(pantoGroup);
+
+                // Environment Light Beams (Only front)
+                if (isFront) {
+                    const spot = new THREE.SpotLight(0xffffee, 5, 400, Math.PI / 6, 0.5, 1);
+                    spot.position.set(-38, -3, 0); spot.target.position.set(-200, -5, 0);
+                    coachGroup.add(spot); coachGroup.add(spot.target);
+
+                    // Volumetric Beam
+                    const beamGeo = new THREE.CylinderGeometry(2, 30, 200, 16, 1, true);
+                    beamGeo.rotateZ(Math.PI / 2);
+                    beamGeo.translate(-100, 0, 0);
+                    const beamMat = new THREE.MeshBasicMaterial({
+                        color: 0xffffee, transparent: true, opacity: 0.1,
+                        blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide
+                    });
+                    const beam = new THREE.Mesh(beamGeo, beamMat);
+                    beam.position.set(-38, -3, 0);
+                    coachGroup.add(beam);
+                }
+            }
+
+            return coachGroup;
+        }
+
+        const frontEngine = createCoach(true, false);
+        trainGroup.add(frontEngine);
+
+        const middleCoach = createCoach(false, false);
+        middleCoach.position.x = 64; // Spaced
+        trainGroup.add(middleCoach);
+
+        const rearEngine = createCoach(false, true);
+        rearEngine.position.x = 128;
+        trainGroup.add(rearEngine);
+
+        // Connector bellows
+        const bellowGeo = new THREE.BoxGeometry(4, 10, 10);
+        const bellowMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.9, map: createBellowTex() });
+        function createBellowTex() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 64; canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#222'; ctx.fillRect(0, 0, 64, 64);
+            ctx.fillStyle = '#111';
+            for (let i = 0; i < 64; i += 8) ctx.fillRect(i, 0, 4, 64);
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        const b1 = new THREE.Mesh(bellowGeo, bellowMat);
+        b1.position.x = 32;
+        trainGroup.add(b1);
+
+        const b2 = new THREE.Mesh(bellowGeo, bellowMat);
+        b2.position.x = 96;
+        trainGroup.add(b2);
+
+        // --- 6. VFX (SPARKS & ATMOSPHERE) ---
+        // Enhanced Fog depth
+        scene.fog = new THREE.FogExp2(0xcbf0ff, 0.0035); // Thicker fog for atmospheric depth
+
+        // Spark Particle System
+        const sparkCount = 200;
+        const sparkGeo = new THREE.BufferGeometry();
+        const sparkPos = new Float32Array(sparkCount * 3);
+        const sparkVel = []; // Track velocity for physics
+        for (let i = 0; i < sparkCount; i++) {
+            sparkPos[i * 3] = 0; sparkPos[i * 3 + 1] = -100; sparkPos[i * 3 + 2] = 0; // Hidden initially
+            sparkVel.push(new THREE.Vector3(0, 0, 0));
+        }
+        sparkGeo.setAttribute('position', new THREE.BufferAttribute(sparkPos, 3));
+
+        const sparkMat = new THREE.PointsMaterial({
+            color: 0xffaa00, size: 0.6, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending
+        });
+        const sparkSystem = new THREE.Points(sparkGeo, sparkMat);
+        scene.add(sparkSystem);
+
+        let sparkIndex = 0;
+        function emitSparks(baseX, baseY, baseZ, isMovingFast) {
+            if (!isMovingFast) return;
+            // Emit a few sparks per frame per bogie
+            for (let i = 0; i < 3; i++) {
+                sparkIndex = (sparkIndex + 1) % sparkCount;
+                const idx = sparkIndex * 3;
+                // Emit from wheel contact points
+                sparkGeo.attributes.position.array[idx] = baseX + (Math.random() - 0.5) * 2;
+                sparkGeo.attributes.position.array[idx + 1] = baseY + Math.random() * 0.5;
+                sparkGeo.attributes.position.array[idx + 2] = baseZ + (Math.random() - 0.5) * 2;
+
+                // Blast upwards and backwards (right)
+                sparkVel[sparkIndex].set(
+                    Math.random() * 2 + 1, // X: Backwards
+                    Math.random() * 2 + 1, // Y: Up
+                    (Math.random() - 0.5) * 2 // Z: Spread
+                );
+            }
+        }
+
+        function updateSparks(delta) {
+            const pos = sparkGeo.attributes.position.array;
+            for (let i = 0; i < sparkCount; i++) {
+                if (pos[i * 3 + 1] > -50) { // If active
+                    // Apply velocity
+                    pos[i * 3] += sparkVel[i].x * delta * 30;
+                    pos[i * 3 + 1] += sparkVel[i].y * delta * 30;
+                    pos[i * 3 + 2] += sparkVel[i].z * delta * 30;
+
+                    // Gravity
+                    sparkVel[i].y -= 5 * delta;
+
+                    // Kill if falling below bridge
+                    if (pos[i * 3 + 1] < 35) pos[i * 3 + 1] = -100;
+                }
+            }
+            sparkGeo.attributes.position.needsUpdate = true;
+        }
+
+        // --- RENDER & ANIMATION LOOP ---
+        const clock = new THREE.Clock();
+
+        // Variables updated by GSAP
+        const proxy = {
+            trainX: 200,
+            sunRot: 0,
+            cloudX: 0,
+            cameraY: 50,
+            cameraZ: 100,
+            city1X: 0,
+            city2X: 0,
+            city3X: 0
+        };
+
+        // Physics State
+        let lastTrainX = 200;
+        let currentVelocity = 0;
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = Math.min(clock.getDelta(), 0.1); // Cap delta to prevent huge jumps on lag
+            const time = clock.getElapsedTime();
+
+            // 1. Sync Train Position
+            trainGroup.position.x = proxy.trainX;
+
+            // 2. Realistic Physics based on Velocity & Acceleration
+            // Calculate real frame-by-frame physics
+            let rawVelocity = 0;
+            if (delta > 0) {
+                rawVelocity = (proxy.trainX - lastTrainX) / delta;
+            }
+            // Smooth acceleration
+            const acceleration = (rawVelocity - currentVelocity) / (delta || 1);
+            currentVelocity = rawVelocity;
+            lastTrainX = proxy.trainX;
+
+            const speed = Math.abs(currentVelocity);
+            const isMoving = speed > 5;
+
+            if (isMoving) {
+                // Dynamic Bobbing (faster speed = faster/harsher bobbing)
+                // Base frequency on distance traveled, amplitude on speed
+                const bobFreq = proxy.trainX * 0.5;
+                const bobAmp = Math.min(speed * 0.002, 0.4); // Cap max bob
+                trainGroup.position.y = 42 + Math.sin(bobFreq) * bobAmp;
+
+                // Pitching (Acceleration leans back, Deceleration leans forward)
+                // Negative trainX velocity means moving left. 
+                // So negative acceleration means speeding up left (leaning right/positive Z rotation is wrong, we are on X axis)
+                // Wait, train moves along X. Pitch means rotating around Z axis.
+                // Accelerating left (negative x): nose lifts up.
+                const pitchTarget = Math.max(-0.05, Math.min(0.05, acceleration * 0.0005));
+
+                const rotationAmount = proxy.trainX * -0.66; // Negative because moving left = CCW rotation
+
+                // Rotate wheels & Apply Pitch & Emit Sparks
+                [frontEngine, middleCoach, rearEngine].forEach(coach => {
+                    // Smoothly interpolate pitch
+                    coach.rotation.z += (pitchTarget - coach.rotation.z) * 0.1;
+
+                    if (coach.userData.wheels) {
+                        coach.userData.wheels.forEach(w => w.rotation.x = rotationAmount);
+                    }
+
+                    // Emit sparks only when moving fast enough
+                    if (speed > 30) {
+                        // Intensity based on speed roughly
+                        emitSparks(proxy.trainX + coach.position.x - 20, 36.5, 3.5, true);
+                        emitSparks(proxy.trainX + coach.position.x + 20, 36.5, 3.5, true);
+                    }
+                });
+            } else {
+                trainGroup.position.y += (42 - trainGroup.position.y) * 0.1; // Smooth settle
+                [frontEngine, middleCoach, rearEngine].forEach(coach => {
+                    coach.rotation.z *= 0.9; // Settle pitch
+                });
+            }
+
+            // Update spark physics
+            updateSparks(delta);
+
+            // Dynamic Camera Shake based on massive train velocity
+            let shakeX = 0, shakeY = 0, shakeZ = 0;
+            if (isMoving) {
+                const shakeIntensity = Math.min(speed * 0.03, 0.8); // Scale shake with speed
+                shakeX = (Math.random() - 0.5) * shakeIntensity;
+                shakeY = (Math.random() - 0.5) * shakeIntensity;
+                shakeZ = (Math.random() - 0.5) * shakeIntensity * 0.5;
+            }
+
+            // Apply proxied position to camera + shake
+            camera.position.set(shakeX, proxy.cameraY + shakeY, proxy.cameraZ + shakeZ);
+
+            // 3. Parallax Environments
+            sunMesh.rotation.z = proxy.sunRot;
+            sunGroupRot = proxy.sunRot;
+
+            cloudGroup.children.forEach((c, idx) => {
+                c.position.x += proxy.cloudX * (0.01 + (idx % 5) * 0.005);
+            });
+
+            // Sync layered city to GSAP proxy
+            layer1.position.x = proxy.city1X;
+            layer2.position.x = proxy.city2X;
+            layer3.position.x = proxy.city3X;
+
+            // Post-Processing Render (replaces renderer.render)
+            composer.render();
+        }
+        animate();
+
+        // --- GSAP SCROLLTRIGGER ---
+        const tl = gsap.timeline({
+            scrollTrigger: {
+                trigger: "body",
+                start: "top top",
+                end: "bottom bottom",
+                scrub: 1.5, // 1.5 sec smoothing
+            }
+        });
+
+        // 1. Fade out UI
+        tl.to(".scroll-ui", { opacity: 0, duration: 0.5 }, 0);
+
+        // 2. Continuous Parallax Environments
+        tl.to(proxy, {
+            cloudX: -500,
+            sunRot: Math.PI / 4,
+            city1X: -200,
+            city2X: -100,
+            city3X: -50,
+            duration: 10
+        }, 0);
+
+        // 3. Bridge Rises into View (Camera tilts down)
+        tl.to(proxy, {
+            cameraY: 40,
+            cameraZ: 80,
+            duration: 2,
+            ease: "power2.inOut"
+        }, 0);
+
+        tl.to(bridgeGroup.position, {
+            y: 0,
+            duration: 2,
+            ease: "power2.out"
+        }, 0); // At start
+
+        // 4. Train Moves Across
+        tl.to(proxy, {
+            trainX: -250,
+            duration: 6,
+            ease: "none"
+        }, 2.5); // Starts after bridge is up
+
+        // 5. Cinematic "Shredding" / Aspect Ratio narrowing
+        tl.to(".cinematic-bar", {
+            height: "20vh",
+            duration: 1.5,
+            ease: "power2.inOut"
+        }, 3.5);
+
+        // Zoom Camera in tightly on the train, hiding wheels
+        tl.to(proxy, {
+            cameraY: 44, // Window height
+            cameraZ: 35, // Very close
+            duration: 2,
+            ease: "power2.inOut",
+            onUpdate: () => {
+                camera.lookAt(proxy.trainX, 44, 0); // Keep looking at train
+            }
+        }, 3.5);
+
+
+        // --- RESIZE HANDLER ---
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            if (composer) composer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+    </script>
+</body>
+
+</html>
